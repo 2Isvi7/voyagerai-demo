@@ -1,0 +1,49 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Builds
+dist/
+dist-ssr/
+build/
+out/
+
+# Environment — NEVER commit
+.env
+.env.local
+.env.*.local
+.env.development
+.env.production
+.env.test
+
+# Private keys (agent JWKS, mTLS certs) — NEVER commit
+*.pem
+*.key
+agent-private*
+
+# Audit log artifacts
+audit.log.jsonl
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# OS
+.DS_Store
+Thumbs.db
+*.local

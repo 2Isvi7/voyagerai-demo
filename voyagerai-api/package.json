@@ -1,0 +1,22 @@
+{
+  "name": "voyagerai-api",
+  "version": "0.1.0",
+  "description": "VoyagerAI — Auth0 for AI Agents demo API. MCP-style endpoints, CIBA, bounded authority, FGA.",
+  "main": "index.js",
+  "scripts": {
+    "_comment_tls": "NODE_TLS_REJECT_UNAUTHORIZED=0 is a DEV-ONLY workaround for corp TLS interception (same as AcmeBank API). Node's bundled CAs don't trust the corp-issued cert that curl/macOS keychain do. For prod, set NODE_EXTRA_CA_CERTS to the corp CA bundle and remove this flag.",
+    "start": "NODE_TLS_REJECT_UNAUTHORIZED=0 node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "express-oauth2-jwt-bearer": "^1.8.0",
+    "openai": "^6.34.0"
+  }
+}
