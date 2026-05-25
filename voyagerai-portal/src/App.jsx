@@ -11,6 +11,7 @@ import TokenInspector from './pages/TokenInspector';
 import AuditTrail from './pages/AuditTrail';
 import ConnectedAgents from './pages/ConnectedAgents';
 import ToolAuthorization from './pages/ToolAuthorization';
+import Vault from './pages/Vault';
 import Impact from './pages/Impact';
 import ROICalculator from './pages/ROICalculator';
 import Compliance from './pages/Compliance';
@@ -108,6 +109,7 @@ function AppRoutes() {
         <Route path="/auth0/audit" element={<AuditTrail />} />
         <Route path="/auth0/connected-agents" element={<ConnectedAgents />} />
         <Route path="/mcp/tool-authorization" element={<ToolAuthorization />} />
+        <Route path="/vault" element={<Vault />} />
         <Route path="/business/impact" element={<Impact />} />
         <Route path="/business/roi" element={<ROICalculator />} />
         <Route path="/business/compliance" element={<Compliance />} />

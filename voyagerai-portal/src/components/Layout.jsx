@@ -23,6 +23,7 @@ const NAV_SECTIONS = [
     items: [
       { to: '/mcp',                       label: 'MCP Server',          icon: '◈' },
       { to: '/mcp/tool-authorization',    label: 'Tool Authorization',  icon: '⚿' },
+      { to: '/vault',                     label: 'VoyagerVault',        icon: '⚿' },
     ],
   },
   {

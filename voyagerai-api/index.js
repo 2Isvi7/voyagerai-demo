@@ -14,6 +14,8 @@ const { auth, requiredScopes } = require('express-oauth2-jwt-bearer');
 const events = require('./lib/events');
 const audit  = require('./lib/audit');
 const agent  = require('./lib/agent');
+const voyagervault = require('./lib/voyagervault');
+const mgmt   = require('./lib/mgmt');
 
 const app = express();
 app.use(cors());
@@ -28,6 +30,9 @@ const ISSUER = (() => {
   const withScheme = raw.startsWith('http') ? raw : `https://${raw.replace(/^\/+/, '')}`;
   return withScheme.replace(/\/+$/, '');
 })();
+// Write back so libs that read process.env.ISSUER_BASE_URL directly (lib/ciba.js,
+// lib/tokenvault.js) get the normalized value with the scheme.
+process.env.ISSUER_BASE_URL = ISSUER;
 
 const checkJwt = auth({
   audience: process.env.AUDIENCE,
@@ -138,7 +143,7 @@ app.post('/api/agent/chat',
     res.json({ ok: true, sessionId });
 
     // Run the loop async (results stream over SSE, not this HTTP response)
-    agent.streamChat({ messages, jwtPayload, sessionId, agentSub, userSub })
+    agent.streamChat({ messages, jwtPayload, userAccessToken: tokenStr, sessionId, agentSub, userSub })
       .catch((e) => {
         events.pushSession(sessionId, { type: 'error', message: e.message });
         events.pushSession(sessionId, { type: 'done' });
@@ -220,12 +225,71 @@ app.get('/api/bookings/:id/stream', (req, res) => {
   req.on('close', () => { clearInterval(hb); events.dropBooking(id, res); });
 });
 
+// ─── Connected Agents — 3rd-party apps the user authorized ───────────────────
+// Reads Auth0 Mgmt API. The 1st-party Travel Agent never appears here (auto-grant,
+// not user-consented). The Personal AI Assistant (Phase 2B-i) is the canonical
+// entry: scopes `read:trips read:expenses`, audience `https://api.voyagerai.demo`.
+
+app.get('/api/connected-agents', checkJwt, async (req, res) => {
+  if (!mgmt.isConfigured()) {
+    return res.status(503).json({
+      error: 'mgmt_not_configured',
+      message: 'Auth0 Mgmt API M2M not configured. See docs/AUTH0-TENANT.md §7.',
+    });
+  }
+  const userId = req.auth?.payload?.sub;
+  try {
+    const grants = await mgmt.listUserGrantsEnriched(userId);
+    // Hide 1st-party clients — they're system grants, not user-consented apps.
+    const visible = grants.filter((g) => !g.client?.is_first_party);
+    res.json({ user_id: userId, grants: visible });
+  } catch (e) {
+    res.status(500).json({ error: e.code || 'mgmt_failed', message: e.message });
+  }
+});
+
+app.delete('/api/connected-agents/:grantId', checkJwt, async (req, res) => {
+  if (!mgmt.isConfigured()) {
+    return res.status(503).json({ error: 'mgmt_not_configured' });
+  }
+  const userId = req.auth?.payload?.sub;
+  const { grantId } = req.params;
+  try {
+    // Verify the grant belongs to the calling user before revoking. Auth0 doesn't
+    // bind the grantId to the caller's identity — without this check, any user
+    // could revoke any other user's grants if they guessed an id.
+    const grant = await mgmt.getGrant(grantId);
+    if (!grant) return res.status(404).json({ error: 'not_found' });
+    if (grant.user_id !== userId) {
+      return res.status(403).json({ error: 'forbidden', message: 'Grant does not belong to caller' });
+    }
+    await mgmt.deleteGrant(grantId);
+    audit.record({
+      agent_sub: req.auth?.payload?.azp || userId,
+      user_sub: userId,
+      tool: 'revoke_grant',
+      decision: 'allowed',
+      reason: 'user_revoked_grant',
+      grant: { id: grantId, client_id: grant.client_id || grant.clientID, audience: grant.audience },
+    });
+    res.json({ ok: true, id: grantId });
+  } catch (e) {
+    res.status(500).json({ error: e.code || 'mgmt_failed', message: e.message });
+  }
+});
+
 // ─── Audit trail (read for Phase 2 UI) ───────────────────────────────────────
 
 app.get('/api/audit', checkJwt, (req, res) => {
   const { agent: agentParam, decision, tool, limit } = req.query;
   res.json({ rows: audit.list({ agent: agentParam, decision, tool, limit: Number(limit) || 100 }) });
 });
+
+// ─── VoyagerVault — mock downstream service (separate audience) ──────────────
+// Lives in the same Express app for simplicity, but with its own audience and JWT
+// validation. The agent reaches it via Token Vault flow (see lib/tokenvault.js).
+
+voyagervault.mountRoutes(app);
 
 // ─── Server ──────────────────────────────────────────────────────────────────
 
@@ -234,4 +298,7 @@ app.listen(PORT, () => {
   console.log(`VoyagerAI API listening on :${PORT}`);
   console.log(`  audience: ${process.env.AUDIENCE}`);
   console.log(`  issuer:   ${ISSUER}`);
+  if (process.env.VOYAGERVAULT_AUDIENCE) {
+    console.log(`  vault:    ${process.env.VOYAGERVAULT_AUDIENCE}`);
+  }
 });

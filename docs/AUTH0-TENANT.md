@@ -194,9 +194,11 @@ The agent itself needs to be allowed to *request* CIBA tokens with the `approve:
 **Applications → Applications → + Create Application** → *Machine to Machine* — name `VoyagerAI Mgmt`. Authorize against **Auth0 Management API** with at least:
 
 - `read:users`
-- `read:user_idp_tokens` (Phase 3)
-- `read:client_grants`, `delete:client_grants` (Phase 3)
+- `read:grants`, `delete:grants` *(Phase 3.3 — Connected Agents page lists/revokes user-consented OAuth grants)*
+- `read:clients` *(Phase 3.3 — enriches each grant with the app's friendly name)*
 - `create:guardian_enrollment_tickets`, `read:guardian_enrollments`
+
+> Note: `read:grants`/`delete:grants` are **not** the same as `read:client_grants`/`delete:client_grants`. The latter is for client-credentials grants between APIs; the former is for user-consented OAuth authorizations (3rd-party apps), which is what Connected Agents shows.
 
 Copy `Client ID` → API env var `AUTH0_MGMT_CLIENT_ID`. Copy `Client Secret` → `AUTH0_MGMT_CLIENT_SECRET`.
 
@@ -238,11 +240,17 @@ VITE_PERSONAL_ASSISTANT_CLIENT_ID=<3rd-party-client-id>
 
 ---
 
-## 9. (Phase 2) Auth0 FGA store
+## 9. Auth0 FGA — relationship-based authorization
 
-Auth0 Dashboard → **Fine-Grained Authorization** → Create Store named `voyagerai`.
+Powers the **`get_user_trips`** tool. OAuth scopes answer *“can the caller call this tool?”*; FGA answers *“on which records?”* The agent has `read:trips`, but FGA decides which `user_profile`s it's allowed to read.
 
-Paste this authorization model (Authorization Model tab → Edit):
+### 9.1 Create the store
+
+Auth0 Dashboard → **Fine-Grained Authorization** → **+ Create Store** → name it `voyagerai-demo`.
+
+### 9.2 Paste the model
+
+In the new store: **Model → Edit** → paste this and **Save**:
 
 ```
 model
@@ -253,38 +261,135 @@ type user
 type cost_center
   relations
     define member: [user]
-    define approver: [user]
 
-type trip
+type user_profile
   relations
-    define cost_center: [cost_center]
     define owner: [user]
+    define cost_center: [cost_center]
     define can_view: owner or member from cost_center
-    define can_approve: approver from cost_center
 ```
 
-Generate API credentials (Settings → API Credentials → Create) and copy:
-- `FGA_STORE_ID`, `FGA_API_URL`, `FGA_CLIENT_ID`, `FGA_CLIENT_SECRET`, `FGA_API_AUDIENCE` → API `.env`
+> **Why this model?** Each user has a `user_profile` record. The profile is owned by its user and tagged with a cost center. A caller is allowed to view a profile if they *own* it OR are a *member* of the same cost center. This mirrors how org charts gate visibility in real corporate platforms — your peers in the same team see your trips, the VP in another cost center does not.
 
-Demo seed tuples are written by `scripts/seed-fga.js` (Phase 2).
+### 9.3 Create API credentials
+
+Store → **Settings → Authorized Clients → + Create Client** → name `voyagerai-api`.
+- Permissions: select **Read** and **Write** (`fga:store:write`, `fga:store:read`, `fga:store:check`).
+- Copy the **Client ID** and **Client Secret** before leaving the page.
+
+In **Settings**, also copy:
+- **Store ID** (UUID)
+- **API URL** (e.g. `https://api.us1.fga.dev`)
+- **API Audience** (e.g. `https://api.us1.fga.dev/`)
+
+### 9.4 Fill in the API `.env`
+
+```
+FGA_API_URL=https://api.us1.fga.dev
+FGA_STORE_ID=01JXXXXXXXXXXXXXXXXXXXXX
+FGA_CLIENT_ID=<from 9.3>
+FGA_CLIENT_SECRET=<from 9.3>
+FGA_API_AUDIENCE=https://api.us1.fga.dev/
+# FGA_API_TOKEN_ISSUER=auth.fga.dev   # default; only set if your region differs
+```
+
+### 9.5 Seed the demo tuples
+
+```
+cd voyagerai-api
+npm run seed-fga
+```
+
+This script is idempotent — it writes 8 tuples for three demo users:
+
+| User                | cost_center  | Outcome for `user:traveler` `can_view` |
+|---------------------|--------------|----------------------------------------|
+| `user:traveler`     | engineering  | ALLOWED (self · owner)                 |
+| `user:peer-eng`     | engineering  | ALLOWED (same cost center)             |
+| `user:vp-engineering` | executive  | DENIED (different cost center)         |
+
+### 9.6 Demo flow (one-liner test in the portal)
+
+In the **Travel Agent · 1st-party** tab on `/mcp`:
+- Pick **FGA · allow** quick prompt → *“Show me Lara's upcoming trips.”* → FGA allows, trips render with a green “Auth0 FGA · access allowed” card. Right-pane timeline shows `fga.check · allowed`.
+- Pick **FGA · deny** quick prompt → *“Show me VP Engineering's upcoming trips.”* → FGA denies, agent surfaces a red “Auth0 FGA · access denied” card. Timeline shows `fga.check · denied`.
+
+The agent and the human see exactly the same boundary — that's the punchline.
+
+### 9.7 If FGA isn't set up yet
+
+The API still boots. Calls to `get_user_trips` return `fga_not_configured` with a pointer back to this section. Every other Phase 1 / Phase 2A demo flow keeps working.
 
 ---
 
-## 10. (Phase 3) Token Vault — Google Calendar
+## 10. Token Vault — VoyagerVault (mock downstream service)
 
-Auth0 Dashboard → **Authentication → Social → + Google / OAuth2**
+Powers the **`save_trip_to_vault`** tool. Demonstrates the Token Vault pattern *without* needing access to Google Cloud / Microsoft Azure / Slack admin: a tiny in-process service called **VoyagerVault** plays the role of the external SaaS. Every part of the OAuth dance is real — separate audience, scoped tokens, JWT validation, audit — only the "downstream service" lives in the same Express app.
 
-If you don't already have one configured:
-1. In Google Cloud Console, create OAuth credentials (Web application). Add Authorized redirect URI: `https://<your-tenant>.auth0.com/login/callback`.
-2. In Auth0, paste the Google `Client ID` + `Client Secret`.
-3. In **Permissions**, add `https://www.googleapis.com/auth/calendar.events`.
+> **Why a mock?** The CISO point of Token Vault is *"the agent never holds long-lived credentials for downstream services — Auth0 brokers a short-lived, scoped token at the moment of need."* That story is true for any downstream service whose tokens flow through Auth0. Whether the audience is `https://www.googleapis.com/...` or `https://api.voyagervault.demo` is implementation; the security model is identical.
 
-Auth0 Dashboard → **Token Vault → Connections → + New Connection** → choose `google-oauth2`. Confirm scopes include `calendar.events`.
+### 10.1 Create the VoyagerVault API (2nd Auth0 API resource)
 
-API `.env`:
-- `GOOGLE_CALENDAR_CONNECTION_ID=<the connection id>`
+Auth0 Dashboard → **APIs → + Create API**:
+- **Name**: `VoyagerVault`
+- **Identifier**: `https://api.voyagervault.demo` (this becomes the JWT `aud`; must match `VOYAGERVAULT_AUDIENCE` in `.env`)
+- **Signing Algorithm**: RS256
 
-> The API exchanges the user's Auth0 access token for a Google access token via Token Vault, then calls `POST https://www.googleapis.com/calendar/v3/calendars/primary/events`. The Google access token never crosses the browser.
+Save. Then on the new API → **Permissions** tab → add:
+- `read:vault` — Read vault entries
+- `write:vault` — Write vault entries
+
+### 10.2 Authorize the Travel Agent for VoyagerVault
+
+Auth0 Dashboard → APIs → **VoyagerVault** → **Machine to Machine Applications** tab → find **VoyagerAI Travel Agent** → toggle ON → expand the permissions row and grant both:
+- `read:vault`
+- `write:vault`
+
+Save. (The Travel Agent already authenticates via `private_key_jwt` from §3 — no new keys, no new app.)
+
+### 10.3 Fill in `voyagerai-api/.env`
+
+```
+# Token Vault — VoyagerVault
+VOYAGERVAULT_AUDIENCE=https://api.voyagervault.demo
+# Default base URL (same Express app on the same port). Override only if you split it.
+# VOYAGERVAULT_BASE_URL=http://localhost:3002
+```
+
+Restart the API. You should see in the boot log:
+```
+VoyagerAI API listening on :3002
+  audience: https://api.voyagerai.demo
+  vault:    https://api.voyagervault.demo
+```
+
+### 10.4 Demo flow
+
+1. In **MCP Server → Travel Agent**, click the **Token Vault · + VoyagerVault** quick prompt.
+2. Watch the right-pane Event Timeline — three events fire in order:
+   1. `tokenvault.exchange` — `POST /oauth/token` with `grant_type=client_credentials`, `audience=https://api.voyagervault.demo`, `private_key_jwt` assertion. Auth0 returns a vault-scoped access token.
+   2. `vault.write` — `POST /api/vault/trips` with `Authorization: Bearer <vault token>` and `X-On-Behalf-Of: <user JWT>`. The vault validates BOTH (agent identity + user identity) and stores the entry.
+   3. The agent's confirmation card shows the brokered token's audience and scope.
+3. Open the **VoyagerVault** page from the sidebar — your saved entry is there with the agent identity stamped on it.
+
+### 10.5 What this captures (CISO talking points)
+
+- **No static downstream credential.** The Travel Agent has no VoyagerVault API key in code or config. Every call mints a fresh token from Auth0.
+- **Audience-scoped tokens.** The user-facing JWT (`aud=https://api.voyagerai.demo`) is *not* valid against VoyagerVault. Reuse is impossible by design.
+- **Double-bound writes.** The vault token proves agent identity; the `X-On-Behalf-Of` header (signed user JWT, validated separately) proves the user the action was on behalf of. One leaked token alone can't impersonate.
+- **Audited.** Every exchange and every write surfaces in the Event Timeline and the Audit Trail with `decision: allowed/denied`, the agent client_id, and the user sub.
+
+### 10.6 If Token Vault isn't set up yet
+
+The API still boots. Calls to `save_trip_to_vault` return `tokenvault_not_configured` (no `VOYAGERVAULT_AUDIENCE`) or `vault_grant_missing` (Travel Agent not authorized for the API yet) with a pointer back to this section. Every other Phase 1 / 2 demo flow keeps working.
+
+### 10.7 Going from mock → real Google Calendar later
+
+Swap two things, no portal changes needed:
+- In `lib/tokenvault.js`, replace the `client_credentials` grant with `urn:auth0:params:oauth:grant-type:token-exchange:federated-connection-access-token` + `subject_token=<user JWT>` + `connection=google-oauth2`.
+- In `lib/agent.js`, replace the `saveTripToVault` call with one that hits Google Calendar's `events.insert` endpoint.
+
+Tool name, audit log shape, and UI cards stay the same. The model proves the pattern is service-agnostic.
 
 ---
 

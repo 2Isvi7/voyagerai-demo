@@ -223,7 +223,7 @@ export default function Assistant({
 
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', padding: space.xl, display: 'flex', flexDirection: 'column', gap: space.md }}>
         {messages.length === 0 && <Hint onPick={(p) => send(p)} disabled={streaming} prompts={quickPrompts} />}
-        {messages.map((m, i) => <Bubble key={i} message={m} />)}
+        {messages.map((m, i) => <Bubble key={i} message={m} onPickFlight={(f) => send(`Book flight ${f.id} (${f.destination} · ${f.cabin} · $${f.price_usd.toLocaleString()}). Use flight_id="${f.id}".`)} />)}
         {pendingBooking?.status === 'pending' && (
           <CibaWaitingCard
             booking={pendingBooking}
@@ -372,7 +372,7 @@ function TierCard({ q, onPick, disabled }) {
   );
 }
 
-function Bubble({ message }) {
+function Bubble({ message, onPickFlight }) {
   const isUser = message.role === 'user';
   const isSystem = message.role === 'system';
   return (
@@ -387,14 +387,17 @@ function Bubble({ message }) {
         fontSize: font.size.body, lineHeight: 1.55,
       }}>
         <div style={{ whiteSpace: 'pre-wrap' }}>{message.content || (message.streaming ? '…' : '')}</div>
-        {message.toolResults?.map((tr, i) => <ToolResultCard key={i} tr={tr} />)}
+        {message.toolResults?.map((tr, i) => <ToolResultCard key={i} tr={tr} onPickFlight={onPickFlight} />)}
       </div>
     </div>
   );
 }
 
-function ToolResultCard({ tr }) {
+function ToolResultCard({ tr, onPickFlight }) {
   const r = tr.result || {};
+  if (tr.name === 'search_flights' && Array.isArray(r.flights)) {
+    return <FlightOptionsCard destination={r.destination} flights={r.flights} onPick={onPickFlight} />;
+  }
   // Booking confirmation
   if (tr.name === 'book_travel' && r.status === 'allowed') {
     return (
@@ -420,7 +423,260 @@ function ToolResultCard({ tr }) {
   if (r.error === 'insufficient_scope') {
     return <PermissionDeniedCard tool={r.tool} required={r.required} held={r.held} />;
   }
+  if (r.error === 'fga_denied') {
+    return <FgaDeniedCard result={r} />;
+  }
+  if (r.error === 'fga_not_configured') {
+    return <FgaNotConfiguredCard message={r.message} />;
+  }
+  if (tr.name === 'get_user_trips' && r.fga_check?.allowed) {
+    return <FgaAllowedCard result={r} />;
+  }
+  if (tr.name === 'save_trip_to_vault' && r.status === 'saved') {
+    return <VaultSavedCard result={r} />;
+  }
+  if (tr.name === 'save_trip_to_vault' && (r.error === 'tokenvault_not_configured' || r.error === 'vault_grant_missing' || r.error === 'vault_failed')) {
+    return <VaultErrorCard error={r.error} message={r.message} />;
+  }
   return null;
+}
+
+function FlightOptionsCard({ destination, flights, onPick }) {
+  return (
+    <div style={{ marginTop: space.md }}>
+      <div style={{ fontSize: font.size.xs, color: color.textMuted, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: space.sm }}>
+        {flights.length} flights to {destination} · pick one to book
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: space.sm }}>
+        {flights.map((f) => <FlightOption key={f.id} flight={f} onPick={onPick} />)}
+      </div>
+    </div>
+  );
+}
+
+function FlightOption({ flight, onPick }) {
+  const tone =
+    flight.price_usd <= 500   ? color.success :
+    flight.price_usd <= 2000  ? color.warn    :
+    color.info;
+  const tier =
+    flight.price_usd <= 500   ? 'Tier 1 · instant' :
+    flight.price_usd <= 2000  ? 'Tier 2 · MFA'     :
+    'Tier 3 · CIBA';
+  return (
+    <button
+      type="button"
+      onClick={() => onPick?.(flight)}
+      style={{
+        padding: space.md,
+        background: color.surface,
+        border: `1px solid ${color.border}`,
+        borderLeft: `3px solid ${tone}`,
+        borderRadius: radius.md,
+        textAlign: 'left',
+        cursor: 'pointer',
+        fontFamily: font.family,
+        color: color.text,
+        transition: 'transform 100ms ease, border-color 100ms ease',
+      }}
+      onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-1px)'; e.currentTarget.style.borderColor = tone; }}
+      onMouseLeave={(e) => { e.currentTarget.style.transform = ''; e.currentTarget.style.borderColor = color.border; e.currentTarget.style.borderLeft = `3px solid ${tone}`; }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
+        <strong style={{ fontSize: font.size.body }}>{flight.airline} · {flight.cabin}</strong>
+        <span style={{
+          padding: '1px 8px', borderRadius: radius.pill, fontSize: font.size.xs,
+          background: `${tone}22`, color: tone, fontWeight: font.weight.semibold,
+        }}>{tier}</span>
+      </div>
+      <div style={{ fontSize: font.size.md, color: color.textDim, marginBottom: space.xs }}>
+        {flight.duration_h}h{flight.layovers > 0 ? ` · ${flight.layovers} layover${flight.layovers > 1 ? 's' : ''}` : ' · nonstop'}
+      </div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+        <span style={{ fontSize: font.size.xs, color: color.textMuted, fontFamily: font.mono }}>{flight.id}</span>
+        <span style={{ fontSize: font.size.lg, fontWeight: font.weight.bold, color: color.text }}>
+          ${flight.price_usd.toLocaleString()}
+        </span>
+      </div>
+    </button>
+  );
+}
+
+function VaultSavedCard({ result }) {
+  return (
+    <div style={{
+      marginTop: space.md, padding: space.lg,
+      background: color.surface, border: `1px solid ${color.success}55`,
+      borderLeft: `3px solid ${color.success}`, borderRadius: radius.md, color: color.text,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: space.sm, marginBottom: space.sm }}>
+        <span style={{
+          width: 24, height: 24, borderRadius: '50%',
+          background: `${color.success}22`, color: color.success,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: font.size.md, fontWeight: font.weight.bold,
+        }}>✓</span>
+        <span style={{ fontWeight: font.weight.semibold, color: color.success, fontSize: font.size.body }}>
+          Saved to VoyagerVault
+        </span>
+        <span style={{
+          marginLeft: 'auto', padding: '1px 8px', borderRadius: radius.pill,
+          background: color.successBg, color: color.success,
+          fontSize: font.size.xs, fontFamily: font.mono,
+        }}>token vault</span>
+      </div>
+      <div style={{ color: color.textDim, fontSize: font.size.md, lineHeight: 1.55, marginBottom: space.md }}>
+        <strong style={{ color: color.text }}>{result.summary}</strong> ·{' '}
+        {result.destination} · {result.dates}
+      </div>
+      <div style={{
+        background: color.surfaceAlt, border: `1px solid ${color.border}`,
+        borderRadius: radius.sm, padding: space.md, fontSize: font.size.xs, fontFamily: font.mono,
+        lineHeight: 1.7, marginBottom: space.md,
+      }}>
+        <div><span style={{ color: color.textMuted }}>vault.id&nbsp;&nbsp;:&nbsp;</span>{result.id}</div>
+        <div><span style={{ color: color.textMuted }}>token.aud&nbsp;:&nbsp;</span>https://api.voyagervault.demo</div>
+        <div><span style={{ color: color.textMuted }}>token.scope:&nbsp;</span>write:vault</div>
+        <div><span style={{ color: color.textMuted }}>obo.user&nbsp;&nbsp;:&nbsp;</span>X-On-Behalf-Of header</div>
+      </div>
+      <span style={{ fontSize: font.size.xs, color: color.textMuted, fontStyle: 'italic' }}>
+        Auth0 brokered a short-lived, audience-scoped token at the moment of need. The agent never held a static VoyagerVault credential.
+      </span>
+    </div>
+  );
+}
+
+function VaultErrorCard({ error, message }) {
+  const isConfig = error === 'tokenvault_not_configured' || error === 'vault_grant_missing';
+  const tone = isConfig ? color.warn : color.danger;
+  return (
+    <div style={{
+      marginTop: space.md, padding: space.lg,
+      background: color.surface, border: `1px solid ${tone}55`,
+      borderLeft: `3px solid ${tone}`, borderRadius: radius.md, color: color.text,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: space.sm, marginBottom: space.sm }}>
+        <span style={{ fontWeight: font.weight.semibold, color: tone, fontSize: font.size.body }}>
+          {isConfig ? '⚠︎ VoyagerVault not configured' : '✗ VoyagerVault call failed'}
+        </span>
+        <span style={{
+          marginLeft: 'auto', padding: '1px 8px', borderRadius: radius.pill,
+          background: `${tone}22`, color: tone,
+          fontSize: font.size.xs, fontFamily: font.mono,
+        }}>{error}</span>
+      </div>
+      <div style={{ color: color.textDim, fontSize: font.size.md, lineHeight: 1.55 }}>
+        {message || 'See docs/AUTH0-TENANT.md §10 for setup.'}
+      </div>
+    </div>
+  );
+}
+
+function FgaDeniedCard({ result }) {
+  const { user, relation, object } = result.fga_check || {};
+  return (
+    <div style={{
+      marginTop: space.md, padding: space.lg,
+      background: color.surface, border: `1px solid ${color.danger}55`,
+      borderLeft: `3px solid ${color.danger}`, borderRadius: radius.md, color: color.text,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: space.sm, marginBottom: space.sm }}>
+        <span style={{
+          width: 24, height: 24, borderRadius: '50%',
+          background: `${color.danger}22`, color: color.danger,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: font.size.md, fontWeight: font.weight.bold,
+        }}>✗</span>
+        <span style={{ fontWeight: font.weight.semibold, color: color.danger, fontSize: font.size.body }}>
+          Auth0 FGA · access denied
+        </span>
+        <span style={{
+          marginLeft: 'auto', padding: '1px 8px', borderRadius: radius.pill,
+          background: color.dangerBg, color: color.danger,
+          fontSize: font.size.xs, fontFamily: font.mono,
+        }}>fga.check · denied</span>
+      </div>
+      <div style={{ color: color.textDim, fontSize: font.size.md, lineHeight: 1.55, marginBottom: space.md }}>
+        Even though the agent has the <code style={{ fontFamily: font.mono, color: color.text }}>read:trips</code> scope, Auth0 FGA blocked this read because you don't share an authorization relationship with{' '}
+        <strong style={{ color: color.text }}>{result.target_label}</strong> (cost center{' '}
+        <code style={{ fontFamily: font.mono }}>{result.target_cost_center}</code>).
+        OAuth scopes ask <em>“can the caller call this tool?”</em> · FGA asks <em>“on which records?”</em>
+      </div>
+      <div style={{
+        background: color.surfaceAlt, border: `1px solid ${color.border}`,
+        borderRadius: radius.sm, padding: space.md, fontSize: font.size.xs, fontFamily: font.mono,
+        lineHeight: 1.7,
+      }}>
+        <div><span style={{ color: color.textMuted }}>user&nbsp;&nbsp;&nbsp;&nbsp;:&nbsp;</span>{user}</div>
+        <div><span style={{ color: color.textMuted }}>relation:&nbsp;</span>{relation}</div>
+        <div><span style={{ color: color.textMuted }}>object&nbsp;&nbsp;:&nbsp;</span>{object}</div>
+        <div style={{ marginTop: 4 }}>
+          <span style={{ color: color.textMuted }}>result&nbsp;&nbsp;:&nbsp;</span>
+          <span style={{ color: color.danger, fontWeight: font.weight.semibold }}>✗ allowed=false</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function FgaAllowedCard({ result }) {
+  const { user, relation, object } = result.fga_check || {};
+  return (
+    <div style={{
+      marginTop: space.md, padding: space.lg,
+      background: color.surface, border: `1px solid ${color.success}55`,
+      borderLeft: `3px solid ${color.success}`, borderRadius: radius.md, color: color.text,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: space.sm, marginBottom: space.sm }}>
+        <span style={{
+          width: 24, height: 24, borderRadius: '50%',
+          background: `${color.success}22`, color: color.success,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: font.size.md, fontWeight: font.weight.bold,
+        }}>✓</span>
+        <span style={{ fontWeight: font.weight.semibold, color: color.success, fontSize: font.size.body }}>
+          Auth0 FGA · access allowed
+        </span>
+        <span style={{
+          marginLeft: 'auto', padding: '1px 8px', borderRadius: radius.pill,
+          background: color.successBg, color: color.success,
+          fontSize: font.size.xs, fontFamily: font.mono,
+        }}>fga.check · allowed</span>
+      </div>
+      <div style={{ color: color.textDim, fontSize: font.size.md, lineHeight: 1.55, marginBottom: space.md }}>
+        FGA allowed the read on <strong style={{ color: color.text }}>{result.target_label}</strong>{' '}
+        (cost center <code style={{ fontFamily: font.mono }}>{result.target_cost_center}</code>) — you share a member relationship through that cost center.
+      </div>
+      <div style={{
+        background: color.surfaceAlt, border: `1px solid ${color.border}`,
+        borderRadius: radius.sm, padding: space.md, fontSize: font.size.xs, fontFamily: font.mono,
+        lineHeight: 1.7,
+      }}>
+        <div><span style={{ color: color.textMuted }}>user&nbsp;&nbsp;&nbsp;&nbsp;:&nbsp;</span>{user}</div>
+        <div><span style={{ color: color.textMuted }}>relation:&nbsp;</span>{relation}</div>
+        <div><span style={{ color: color.textMuted }}>object&nbsp;&nbsp;:&nbsp;</span>{object}</div>
+      </div>
+    </div>
+  );
+}
+
+function FgaNotConfiguredCard({ message }) {
+  return (
+    <div style={{
+      marginTop: space.md, padding: space.lg,
+      background: color.surface, border: `1px solid ${color.warn}55`,
+      borderLeft: `3px solid ${color.warn}`, borderRadius: radius.md, color: color.text,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: space.sm, marginBottom: space.sm }}>
+        <span style={{
+          fontWeight: font.weight.semibold, color: color.warn, fontSize: font.size.body,
+        }}>⚠︎ Auth0 FGA not configured</span>
+      </div>
+      <div style={{ color: color.textDim, fontSize: font.size.md, lineHeight: 1.55 }}>
+        {message || 'Set the FGA_* env vars in voyagerai-api/.env, run npm run seed-fga, and try again.'}
+      </div>
+    </div>
+  );
 }
 
 // CISO-friendly view of an authorization denial. Shows: what the agent tried,

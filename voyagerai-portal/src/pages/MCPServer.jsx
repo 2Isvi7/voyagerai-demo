@@ -27,6 +27,68 @@ const TABS = [
   },
 ];
 
+// 1st-party Travel Agent — search flights to a destination, then click a card.
+// The 3 cabin options per destination span Tier 1/2/3 prices, so one search lets
+// the presenter pick the tier on stage rather than typing a price.
+const TRAVEL_AGENT_QUICK_PROMPTS = [
+  {
+    tier:    'Search',
+    label:   'CDMX · 3 cabins',
+    tone:    'success',
+    range:   '$420–$3,200',
+    sub:     'click any tier',
+    prompt:  'Find me flights to Mexico City.',
+  },
+  {
+    tier:    'Search',
+    label:   'Tokyo · 3 cabins',
+    tone:    'warn',
+    range:   '$850–$5,400',
+    sub:     'click any tier',
+    prompt:  'Find me flights to Tokyo.',
+  },
+  {
+    tier:    'Search',
+    label:   'Singapore · 3 cabins',
+    tone:    'info',
+    range:   '$980–$4,500',
+    sub:     'business → CIBA',
+    prompt:  'Find me flights to Singapore.',
+  },
+  {
+    tier:    'Search',
+    label:   'RTW · over cap',
+    tone:    'danger',
+    range:   '$4,900–$9,800',
+    sub:     'bounded authority',
+    prompt:  'Find me a round-the-world flight option.',
+  },
+  {
+    tier:    'FGA · allow',
+    label:   "Peer's trips ✓",
+    tone:    'success',
+    range:   'same cost center',
+    sub:     'fga.check allowed',
+    prompt:  "Show me Lara's upcoming trips. Use targetUserId 'peer-eng'.",
+  },
+  {
+    tier:    'FGA · deny',
+    label:   "VP's trips ✗",
+    tone:    'danger',
+    range:   'different cost center',
+    sub:     'fga.check denied',
+    prompt:  "Show me VP Engineering's upcoming trips. Use targetUserId 'vp-engineering'.",
+  },
+  {
+    tier:    'Token Vault',
+    label:   '+ VoyagerVault',
+    tone:    'info',
+    range:   'audience-scoped grant',
+    sub:     'agent never holds credential',
+    prompt:  "Save my Mexico City trip (June 12-15) to VoyagerVault. Notes: hotel near Reforma, vegetarian dinner reservation Day 2.",
+  },
+];
+
 // Personal Assistant has only read:trips + read:expenses. The first 3 prompts work,
 // the 4th is the demo punchline — it triggers insufficient_scope on book_travel.
 const PA_QUICK_PROMPTS = [
@@ -118,7 +180,7 @@ export default function MCPServer() {
           display: 'flex', flexDirection: 'column', overflow: 'hidden',
         }}>
           {activeTab === 'first-party' && (
-            <Assistant embedded />
+            <Assistant embedded quickPrompts={TRAVEL_AGENT_QUICK_PROMPTS} />
           )}
           {activeTab === 'third-party' && paStatus === 'authorized' && (
             <Assistant
@@ -364,6 +426,12 @@ function kindStyle(kind = '') {
   if (kind.startsWith('ciba.appr'))return { label: 'CIBA',   color: color.success };
   if (kind.startsWith('ciba.rej')) return { label: 'CIBA',   color: color.danger };
   if (kind.startsWith('ciba'))     return { label: 'CIBA',   color: color.info };
+  if (kind === 'fga.check')        return { label: 'FGA',    color: color.brand };
+  if (kind.startsWith('fga'))      return { label: 'FGA',    color: color.danger };
+  if (kind === 'tokenvault.exchange') return { label: 'VAULT', color: color.success };
+  if (kind.startsWith('tokenvault'))  return { label: 'VAULT', color: color.danger };
+  if (kind === 'vault.write')         return { label: 'VAULT', color: color.success };
+  if (kind.startsWith('vault'))       return { label: 'VAULT', color: color.danger };
   if (kind.includes('error'))      return { label: 'ERROR',  color: color.danger };
   return { label: kind.toUpperCase(), color: color.textMuted };
 }

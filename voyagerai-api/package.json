@@ -4,15 +4,17 @@
   "description": "VoyagerAI — Auth0 for AI Agents demo API. MCP-style endpoints, CIBA, bounded authority, FGA.",
   "main": "index.js",
   "scripts": {
-    "_comment_tls": "NODE_TLS_REJECT_UNAUTHORIZED=0 is a DEV-ONLY workaround for corp TLS interception (same as AcmeBank API). Node's bundled CAs don't trust the corp-issued cert that curl/macOS keychain do. For prod, set NODE_EXTRA_CA_CERTS to the corp CA bundle and remove this flag.",
-    "start": "NODE_TLS_REJECT_UNAUTHORIZED=0 node index.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "_comment_tls": "NODE_TLS_REJECT_UNAUTHORIZED=0 is a DEV-ONLY workaround for corp TLS interception. Node's bundled CAs don't trust the corp-issued cert that curl/macOS keychain do. For prod, set NODE_EXTRA_CA_CERTS to the corp CA bundle and remove this flag.",
+    "start":    "NODE_TLS_REJECT_UNAUTHORIZED=0 node index.js",
+    "seed-fga": "NODE_TLS_REJECT_UNAUTHORIZED=0 node scripts/seed-fga.js",
+    "test":     "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@openfga/sdk": "^0.9.6",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
